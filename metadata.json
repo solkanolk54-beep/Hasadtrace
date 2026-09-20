@@ -1,0 +1,6 @@
+{
+  "name": "Hasad Trace",
+  "description": "منصة تتبع المنتجات الفلاحية العضوية من المزرعة إلى المستهلك بنظام QR الذكي والتوثيق الرقمي الموثوق",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

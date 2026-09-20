@@ -1,0 +1,79 @@
+version: '3.8'
+
+services:
+  # 1. PostgreSQL Database with PostGIS extensions
+  postgres:
+    image: postgis/postgis:16-3.4-alpine
+    container_name: farmtrace-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: farmtrace_db
+      POSTGRES_USER: farmtrace_user
+      POSTGRES_PASSWORD: farmtrace_secure_password_2026
+      PGDATA: /var/lib/postgresql/data/pgdata
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./init-db.sql:/docker-entrypoint-initdb.d/init-db.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U farmtrace_user -d farmtrace_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - farmtrace-network
+
+  # 2. Redis In-Memory Cache & Anti-Fraud Rate Limiter
+  redis:
+    image: redis:7-alpine
+    container_name: farmtrace-redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes --requirepass farmtrace_redis_secret_2026
+    ports:
+      - "6379:6379"
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "farmtrace_redis_secret_2026", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - farmtrace-network
+
+  # 3. Node.js / NestJS Backend API Server
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: farmtrace-backend
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      DATABASE_URL: postgresql://farmtrace_user:farmtrace_secure_password_2026@postgres:5432/farmtrace_db?schema=public
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: farmtrace_redis_secret_2026
+      TRACE_HMAC_SECRET_KEY: farmtrace-hsm-master-cryptographic-key-prod-2026
+      NEXT_PUBLIC_APP_DOMAIN: https://trace.hasad.farm
+    ports:
+      - "3000:3000"
+    networks:
+      - farmtrace-network
+
+volumes:
+  pgdata:
+    driver: local
+  redisdata:
+    driver: local
+
+networks:
+  farmtrace-network:
+    driver: bridge
