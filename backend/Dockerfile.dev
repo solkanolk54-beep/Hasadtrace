@@ -1,0 +1,22 @@
+FROM node:20-alpine
+
+# Set working directory
+WORKDIR /usr/src/app
+
+# Install system dependencies (build tools if needed for native extensions)
+RUN apk add --no-cache libc6-compat python3 make g++
+
+# Copy package descriptors first for Docker layer caching
+COPY package*.json ./
+
+# Install development & production dependencies
+RUN npm install
+
+# Copy application source code
+COPY . .
+
+# Expose HTTP API port and Node Inspector debug port
+EXPOSE 3000 9229
+
+# Start server in development watch mode
+CMD ["npm", "run", "start:dev"]

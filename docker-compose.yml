@@ -1,53 +1,69 @@
 version: '3.8'
 
 services:
-  # 1. PostgreSQL Database with PostGIS extensions
+  # ============================================================================
+  # 1. PostgreSQL (PostGIS) Database Engine
+  # ============================================================================
   postgres:
     image: postgis/postgis:16-3.4-alpine
-    container_name: farmtrace-postgres
+    container_name: farmtrace_postgres
     restart: unless-stopped
     environment:
-      POSTGRES_DB: farmtrace_db
-      POSTGRES_USER: farmtrace_user
-      POSTGRES_PASSWORD: farmtrace_secure_password_2026
+      POSTGRES_DB: ${POSTGRES_DB:-farmtrace_db}
+      POSTGRES_USER: ${POSTGRES_USER:-farmtrace_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-farmtrace_secure_pass_2026}
       PGDATA: /var/lib/postgresql/data/pgdata
     ports:
-      - "5432:5432"
+      - "${POSTGRES_PORT:-5432}:5432"
     volumes:
-      - pgdata:/var/lib/postgresql/data
-      - ./init-db.sql:/docker-entrypoint-initdb.d/init-db.sql:ro
+      # مجلد تخزين بيانات قاعدة البيانات بشكل دائم (Persistent Volume)
+      - postgres_data:/var/lib/postgresql/data
+      # سكربت تهيئة قاعدة البيانات والتأكد من تفعيل ملحقات PostGIS و UUID
+      - ./init-db.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U farmtrace_user -d farmtrace_db"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-farmtrace_user} -d ${POSTGRES_DB:-farmtrace_db}"]
       interval: 10s
       timeout: 5s
       retries: 5
+      start_period: 10s
     networks:
-      - farmtrace-network
+      - farmtrace_network
 
-  # 2. Redis In-Memory Cache & Anti-Fraud Rate Limiter
+  # ============================================================================
+  # 2. Redis Cache & Anti-Fraud Scanner Rate Limiting
+  # ============================================================================
   redis:
     image: redis:7-alpine
-    container_name: farmtrace-redis
+    container_name: farmtrace_redis
     restart: unless-stopped
-    command: redis-server --appendonly yes --requirepass farmtrace_redis_secret_2026
+    command: >
+      redis-server 
+      --appendonly yes 
+      --requirepass ${REDIS_PASSWORD:-farmtrace_redis_secret_2026}
+      --maxmemory 256mb
+      --maxmemory-policy allkeys-lru
     ports:
-      - "6379:6379"
+      - "${REDIS_PORT:-6379}:6379"
     volumes:
-      - redisdata:/data
+      # مجلد الحفظ الدائم لبيانات Redis (AOF Persistence)
+      - redis_data:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "-a", "farmtrace_redis_secret_2026", "ping"]
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-farmtrace_redis_secret_2026}", "ping"]
       interval: 10s
       timeout: 5s
       retries: 5
+      start_period: 5s
     networks:
-      - farmtrace-network
+      - farmtrace_network
 
-  # 3. Node.js / NestJS Backend API Server
+  # ============================================================================
+  # 3. Node.js / NestJS Backend Application (Development Mode with Hot-Reload)
+  # ============================================================================
   backend:
     build:
-      context: .
-      dockerfile: Dockerfile
-    container_name: farmtrace-backend
+      context: ./backend
+      dockerfile: Dockerfile.dev
+    container_name: farmtrace_backend_dev
     restart: unless-stopped
     depends_on:
       postgres:
@@ -55,25 +71,44 @@ services:
       redis:
         condition: service_healthy
     environment:
-      NODE_ENV: production
+      NODE_ENV: development
       PORT: 3000
-      DATABASE_URL: postgresql://farmtrace_user:farmtrace_secure_password_2026@postgres:5432/farmtrace_db?schema=public
+      # الاتصال بالخدمات عبر أسماء الحاويات الداخلية (DNS resolution داخل Docker network)
+      DATABASE_URL: postgresql://${POSTGRES_USER:-farmtrace_user}:${POSTGRES_PASSWORD:-farmtrace_secure_pass_2026}@postgres:5432/${POSTGRES_DB:-farmtrace_db}?schema=public
       REDIS_HOST: redis
       REDIS_PORT: 6379
-      REDIS_PASSWORD: farmtrace_redis_secret_2026
-      TRACE_HMAC_SECRET_KEY: farmtrace-hsm-master-cryptographic-key-prod-2026
-      NEXT_PUBLIC_APP_DOMAIN: https://trace.hasad.farm
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-farmtrace_redis_secret_2026}
+      TRACE_HMAC_SECRET_KEY: ${TRACE_HMAC_SECRET_KEY:-farmtrace-dev-hmac-master-key-32bytes-secret}
+      FRONTEND_URL: http://localhost:3000
     ports:
-      - "3000:3000"
+      - "3000:3000"  # منفذ خادم التطبيق
+      - "9229:9229"  # منفذ فحص وتتبع الأخطاء البرمجية (Node.js V8 Debugger / Inspector)
+    volumes:
+      # مجلد مشترك لمزامنة الأكواد لحظياً (Hot-Reloading / Live Sync)
+      - ./backend:/usr/src/app
+      # مجلد مجهول لعزل حزم node_modules الخاصة بالحاوية ومنع تضاربها مع نظام تشغيل المضيف
+      - /usr/src/app/node_modules
+    command: npm run start:dev
+    stdin_open: true
+    tty: true
     networks:
-      - farmtrace-network
+      - farmtrace_network
 
+# ============================================================================
+# Persistent Storage Volumes (المجلدات التخزينية المشتركة)
+# ============================================================================
 volumes:
-  pgdata:
+  postgres_data:
+    name: farmtrace_postgres_data
     driver: local
-  redisdata:
+  redis_data:
+    name: farmtrace_redis_data
     driver: local
 
+# ============================================================================
+# Networks (الشبكة الداخلية الآمنة للتواصل بين الحاويات)
+# ============================================================================
 networks:
-  farmtrace-network:
+  farmtrace_network:
+    name: farmtrace_internal_net
     driver: bridge
